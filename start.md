@@ -178,7 +178,214 @@ DEV_ENABLE_PAYMENT=true go run main.go --log-dir ./logs
 > 走"管理 → 为用户订阅套餐"则无需支付，直接绑定。
 
 
-## 总结一下网络支付接入的内容：汇总支付
+## 支付网关配置指南
+
+所有支付网关统一在 **管理面板 → 系统设置 → Billing → Payment Gateway** 配置。配置前必须先确认合规声明。
+
+### 通用前提：合规声明
+
+```
+管理面板 → 系统设置 → Billing → Payment Gateway
+→ 在页面底部找到"合规声明"区域
+→ 阅读并勾选确认
+→ 保存
+```
+
+只有确认后，所有支付方式才会生效（`controller/payment_webhook_availability.go` 中每个 `is*Enabled()` 都先检查 `compliance_confirmed`）。
+
+> **Dev 模式**：`DEV_ENABLE_PAYMENT=true go run main.go` 可跳过合规检查和凭证检查。
+
+---
+
+### 1. 易支付 (Epay)
+
+**适用场景**：国内用户，支持支付宝、微信等本地支付方式。
+
+| 配置字段 | 说明 | 获取方式 |
+|---------|------|---------|
+| 支付地址 (PayAddress) | 易支付站点地址，如 `https://epay.example.com` | 易支付商户后台 |
+| 商户ID (EpayId) | 商户号 | 易支付商户后台 |
+| 商户密钥 (EpayKey) | API 密钥 | 易支付商户后台 |
+| 回调地址 (CustomCallbackAddress) | 支付成功后的回调地址，如 `https://your-api.com` | 你的 NewAPI 部署地址 |
+| 支付方式 (PayMethods) | 可用支付通道（支付宝/微信/QQ钱包等） | 自行配置 JSON |
+| 最低充值 (MinTopUp) | 单笔最低充值金额 | 自行设置的阈值 |
+| 汇率 (USDExchangeRate) | 1 USD = ? CNY | 默认 7.3 |
+
+**后端逻辑**（`controller/topup.go:136`）：
+```go
+func GetEpayClient() *epay.Client {
+    // 检查 PayAddress / EpayId / EpayKey 是否为空
+    // 用 epay.NewClient 创建支付客户端
+}
+```
+
+**配置示例**：
+```
+PayAddress:        https://pay.your-epay.com
+EpayId:            10001
+EpayKey:           abcdef1234567890
+CustomCallbackAddress: https://newapi.example.com
+PayMethods:        [{"name":"支付宝","icon":"SiAlipay","type":"alipay"},
+                   {"name":"微信支付","icon":"SiWechat","type":"wxpay"}]
+MinTopUp:          1
+```
+
+> 注意：所有 Epay 回调接口前缀必须与 `CustomCallbackAddress` 一致。应用内回调路由：
+> - `/api/user/epay/notify` — 充值异步通知
+> - `/api/user/epay/return` — 充值同步跳回
+> - `/api/subscription/epay/notify` — 订阅异步通知
+> - `/api/subscription/epay/return` — 订阅同步跳回
+
+---
+
+### 2. Stripe
+
+**适用场景**：海外用户，支持国际信用卡支付。
+
+| 配置字段 | 说明 | 获取方式 |
+|---------|------|---------|
+| API Secret (StripeApiSecret) | `sk_live_xxx` 或 `sk_test_xxx` | Stripe Dashboard → Developers → API keys |
+| Webhook Secret (StripeWebhookSecret) | `whsec_xxx` | Stripe Dashboard → Developers → Webhooks → 添加 endpoint |
+| Price ID (StripePriceId) | `price_xxx` | Stripe Dashboard → Products → 创建产品 → 获取 Price ID |
+| 单价 (StripeUnitPrice) | 每单位配额对应的 USD 金额 | 自行设置 |
+| 最低充值 (StripeMinTopUp) | 单笔最低充值金额（USD） | 默认 1 |
+| 折扣码 (StripePromotionCodesEnabled) | 是否启用折扣码 | true / false |
+
+**后端逻辑**（`controller/payment_webhook_availability.go:14`）：
+```go
+func isStripeTopUpEnabled() bool {
+    return StripeApiSecret != "" && StripeWebhookSecret != "" && StripePriceId != ""
+}
+```
+
+**Webhook 配置步骤**：
+1. 在 Stripe Dashboard 创建 Webhook endpoint：`https://your-newapi.com/api/stripe/webhook`
+2. 监听事件：`checkout.session.completed`、`invoice.paid`
+3. Stripe 返回 `whsec_xxx` 签名密钥，填入 Webhook Secret 字段
+
+**配置示例**：
+```
+StripeApiSecret:          sk_live_xxxxxxxxxxxxxxxx
+StripeWebhookSecret:      whsec_xxxxxxxxxxxxxxxx
+StripePriceId:            price_xxxxxxxxxxxxx
+StripeUnitPrice:          8.0
+StripeMinTopUp:           1
+StripePromotionCodesEnabled: false
+```
+
+---
+
+### 3. Creem
+
+**适用场景**：面向开发者的支付平台，支持一键购买 API 产品。
+
+| 配置字段 | 说明 | 获取方式 |
+|---------|------|---------|
+| API Key (CreemApiKey) | Creem 平台 API 密钥 | Creem Dashboard |
+| Webhook Secret (CreemWebhookSecret) | Webhook 签名密钥 | Creem Dashboard → Webhooks |
+| 产品列表 (CreemProducts) | JSON 数组，定义可购买的产品 | 自行配置 |
+| 测试模式 (CreemTestMode) | 沙箱环境开关 | true / false |
+
+**后端逻辑**（`controller/payment_webhook_availability.go:31`）：
+```go
+func isCreemTopUpEnabled() bool {
+    return CreemApiKey != "" && CreemProducts != "" && CreemProducts != "[]"
+}
+```
+
+**Webhook 配置步骤**：在 Creem Dashboard 添加 Webhook: `https://your-newapi.com/api/creem/webhook`
+
+**配置示例**：
+```
+CreemApiKey:           creem_sk_xxxxxxxxxxxx
+CreemWebhookSecret:    whsec_xxxxxxxxxxxx
+CreemProducts:         [{"name":"基础包","price":5,"credits":1000},
+                        {"name":"高级包","price":20,"credits":5000}]
+CreemTestMode:         false
+```
+
+---
+
+### 4. Waffo
+
+**适用场景**：企业级独立结算平台，功能包括商户管理、门店、产品编码。
+
+分为两种模式：**标准 Waffo** 和 **Waffo Pancake**。
+
+#### 4a. 标准 Waffo
+
+| 配置字段 | 说明 |
+|---------|------|
+| WaffoEnabled | 启用开关 |
+| API Key (WaffoApiKey) | API 密钥 |
+| Private Key (WaffoPrivateKey) | 私钥 |
+| Public Cert (WaffoPublicCert) | 公钥证书 |
+| 沙箱模式 (WaffoSandbox) | 沙箱启用后使用沙箱密钥 |
+| 沙箱 API Key (WaffoSandboxApiKey) | 沙箱环境密钥 |
+| 沙箱 Private Key (WaffoSandboxPrivateKey) | 沙箱环境私钥 |
+| 沙箱 Public Cert (WaffoSandboxPublicCert) | 沙箱环境公钥 |
+| 商户ID (WaffoMerchantId) | 商户唯一标识 |
+| 货币 (WaffoCurrency) | 结算货币，默认 USD |
+| 单价 (WaffoUnitPrice) | 1.0 |
+| 最低充值 (WaffoMinTopUp) | 默认 1 |
+| 支付方式 (WaffoPayMethods) | JSON 配置可用支付方式 |
+| 回调地址 (WaffoNotifyUrl) | 异步通知地址 |
+| 返回地址 (WaffoReturnUrl) | 同步跳回地址 |
+| 订阅返回地址 (WaffoSubscriptionReturnUrl) | 订阅成功跳回 |
+
+**后端逻辑**（`controller/payment_webhook_availability.go:49`）：
+```go
+func isWaffoTopUpEnabled() bool {
+    return complianceConfirmed && WaffoEnabled && webhookConfigured
+}
+```
+
+#### 4b. Waffo Pancake
+
+Waffo Pancake 是简化版 Waffo，支持产品编码直接结算。
+
+| 配置字段 | 说明 | 获取方式 |
+|---------|------|---------|
+| 商户ID (WaffoPancakeMerchantID) | 商户标识 | Waffo Pancake 后台 |
+| 私钥 (WaffoPancakePrivateKey) | API 签名私钥 | Waffo Pancake 后台 |
+| 返回地址 (WaffoPancakeReturnURL) | 回调地址 | 你的 NewAPI 地址 |
+| 单价 (WaffoPancakeUnitPrice) | 1.0 | 自行设置 |
+| 最低充值 (WaffoPancakeMinTopUp) | 默认 1 | 自行设置 |
+| 门店ID (WaffoPancakeStoreID) | 自动分配，只读 | 配置成功后自动生成 |
+| 产品ID (WaffoPancakeProductID) | 产品编码 | 配置成功后自动生成 |
+
+**后端逻辑**（`controller/payment_webhook_availability.go:76`）：
+```go
+func isWaffoPancakeTopUpEnabled() bool {
+    return complianceConfirmed && MerchantID != "" && PrivateKey != "" && ProductID != ""
+}
+```
+
+---
+
+### 支付方式总览比较
+
+| 特性 | 易支付 (Epay) | Stripe | Creem | Waffo | Waffo Pancake |
+|-----|:---:|:---:|:---:|:---:|:---:|
+| 国内支付（支付宝/微信） | ✓ | ✗ | ✗ | ✓ | ✓ |
+| 国际信用卡 | ✗ | ✓ | ✓ | ✓ | ✓ |
+| 订阅账单 | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 一键充值 | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 沙箱测试 | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Webhook 配置 | 内建路由 | 需额外配置 | 需额外配置 | 需额外配置 | 自动签发 |
+| 配置复杂度 | 低 | 中 | 低 | 高 | 低 |
+
+### 花一分钟快速验证支付配置
+
+以 Epay 为例的完整端到端测试：
+```
+1. 确认合规声明
+2. 填入 EpayId / EpayKey / PayAddress
+3. 设置 CustomCallbackAddress（通常就是 NewAPI 的服务器地址）
+4. 保存
+5. 用户登录 → 钱包 → 点击充值 → 应能看到支付宝/微信支付按钮
+6. 点击下单 → 跳转到易支付付款页 → 完成支付 → 自动回调 → 余额到账
+```
 
 
 ## 1. 项目定位
