@@ -25,3 +25,6 @@ var TaskPricePatches []string
 // TrustedRedirectDomains is a list of trusted domains for redirect URL validation.
 // Domains support subdomain matching (e.g., "example.com" matches "sub.example.com").
 var TrustedRedirectDomains []string
+
+// DevEnablePayment bypasses payment compliance checks in dev mode.
+var DevEnablePayment bool

@@ -185,4 +185,6 @@ func initConstantEnv() {
 		}
 	}
 	constant.TrustedRedirectDomains = trustedDomains
+
+	constant.DevEnablePayment = GetEnvOrDefaultBool("DEV_ENABLE_PAYMENT", false)
 }

@@ -1,5 +1,186 @@
 # New API 项目分析
 
+## 本地开发部署文档
+[本地开发部署文档：](https://docs.newapi.pro/zh/docs/installation/deployment-methods/local-development)
+
+### 前端部署说明：
+第三部分：
+
+- 新版前端 (default):
+- 旧版前端（class）
+
+
+### 后段部署说明：
+
+开发环境默认使用SQLite，
+```
+PORT=3000
+SQL_DSN=root:password@tcp(localhost:3306)/new-api   # 如使用MySQL，取消注释并修改
+# REDIS_CONN_STRING=redis://localhost:6379         # 如使用Redis，取消注释并修改
+```
+
+
+#### 后端实时调试：
+go run main.go --log-dir ./logs
+
+
+
+## 核心问题：如何统一管理API网关服务，假设我想要加入kimi的厂商，为我们的一个小组提供5个账号服务访问，请给出NewAPI平台使用方式，这里的kimiapi地址：https://api.moonshot.cn/v1
+
+- 三步：创建渠道，创建用户，然后通过openAI客户端调用；
+- 加入一个kimi的请求的提供商和地址。
+访问api地址：https://api.moonshot.cn/v1
+
+这里如何统一管理转发配置的API的厂家的网关？
+
+Kimi (Moonshot) 不需要任何开发，NewAPI 已有完整适配器。全流程就是纯配置操作：
+
+1. 管理面板 → 渠道管理 → 新增5条 Moonshot 渠道，分组都设为 kimi-team
+注意：这里的分组创建：console/setting?tab=ratio，创建支付设置位置，这里选择：分组管理创建。
+
+2. 管理面板 → 用户管理 → 新建用户，分组设为 kimi-team，设置配额
+3. 用户拿到 Token → 用 OpenAI 兼容客户端连接 http://your-newapi:3000/v1
+4. 新建套餐：套餐这里需要配置订阅讨论的确定输入隐私。
+注意：创建套餐后，可以购买创建
+5. 通过新用户订阅的内容，比如：admin2，密码nyh123456，进入后。
+```
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer sk-xxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kimi-k2.5",
+    "messages": [{"role": "user", "content": "你好"}]
+  }'
+
+
+
+
+```
+
+NewAPI 自动完成负载均衡（5个账号轮询）、故障切换、用量统计和计费。你无需关心底层哪个 Key 被用到。
+
+### 订阅套餐与Token的关系：用户如何通过Token使用订阅
+
+核心链路：**渠道绑定分组 → 套餐升级用户分组 → Token继承分组 → 匹配渠道**
+
+```
+                   渠道1(kimi-team) ──┐
+                   渠道2(kimi-team) ──┤
+                   渠道3(kimi-team) ──┤  ← 渠道绑定到分组
+                   渠道4(kimi-team) ──┤
+                   渠道5(kimi-team) ──┘
+                                        │
+                 订阅套餐(UpgradeGroup=kimi-team)
+                                        │
+                 用户购买订阅 → 用户分组自动变为 kimi-team
+                                        │
+                 用户创建Token → Token继承用户分组 kimi-team
+                                        │
+                 用户用Token调API → 分发器匹配kimi-team渠道 → 负载均衡
+```
+
+#### 具体操作步骤
+
+**第一步：创建套餐时设升级分组**
+
+在管理面板 → 套餐管理 → 新增套餐，关键字段：
+
+| 字段 | 值 | 说明 |
+|---|---|---|
+| 升级分组 (UpgradeGroup) | `kimi-team` | 用户购买后自动升级到此分组 |
+| 降级分组 (DowngradeGroup) | `default` | 订阅过期后用户回退到默认分组 |
+| 总配额 (TotalAmount) | `1000000` | 订阅包含的额度（可周期性重置） |
+| 配额重置周期 | `monthly` | 每月重置额度 |
+| 允许余额兜底 | true | 额度用完后可从钱包余额扣 |
+
+**第二步：用户购买套餐**
+
+- 方式A：用户自行在面板点击"购买套餐" → 余额扣费或支付 → 订阅激活
+- 方式B：管理员在"用户管理 → 操作为用户订阅套餐" → 无支付直接绑定
+
+**第三步：用户创建Token并开始使用**
+
+用户购买后，系统会自动：
+1. 将用户的 `group` 从默认分组升级到 `kimi-team`
+2. 用户已有的Token（如果有）仍然可用—Token的 `group` 为空时自动继承用户分组
+3. 也可以新建一个Token，分组字段留空即可
+
+用户拿到Token后使用：
+```bash
+curl http://localhost:3000/v1/chat/completions \
+  -H "Authorization: Bearer <用户的Token>" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "kimi-k2.5", "messages": [{"role":"user","content":"hi"}]}'
+```
+
+分发器会：
+1. 读取Token → 找到用户 → 找到用户分组 `kimi-team`
+2. 在所有 `kimi-team` 分组的渠道中选可用的一条
+3. 如果配额用完 → 检查 `AllowWalletOverflow`，允许则从钱包余额扣
+
+**第四步：订阅过期时的自动降级**
+
+套餐过期后，系统自动：
+1. 标记订阅状态为 `expired`
+2. 用户分组回退到 `DowngradeGroup`（如 `default`）
+3. 用户的Token仍然可用，但只能匹配 `default` 分组的渠道
+4. 续费后分组自动升回 `kimi-team`
+
+
+### （1）关于其中使用：订阅套餐创建和变更已锁定，管理员需先在支付设置中确认合规声明。
+操作路径：
+
+1. 登录管理面板 → 系统设置 → 计费设置（Billing） → 支付网关（Payment Gateway）
+2. 在支付网关配置区域，会有一个 合规声明确认 的对话框/按钮
+3. 阅读合规提醒并勾选确认
+4. 确认后，所有被锁的订阅操作（创建套餐、修改套餐、变更订阅等）会自动解锁
+
+### （2）管理员未开启在线支付功能，请联系管理员配置。
+所以你的完整配置路径应该是：
+增加一个配置：DEV_ENABLE_PAYMENT=true，true跳过检查
+
+1. 管理面板 → 系统设置 → Billing → Payment Gateway
+2. 先点 合规声明确认（确认弹窗）
+3. 然后在同一页面配置至少一个真实的支付网关（如 Stripe），填入 API Secret、Webhook Secret、Price ID 等
+4. 保存后刷新，订阅管理和充值功能才会解锁
+
+关键逻辑在 controller/payment_webhook_availability.go：每种支付方式同时需要 compliance_confirmed == true + 凭证不为空。只确认合规但没填任何支付凭证，计费和订阅功能仍然不可用。
+
+### （3）Dev 模式下打通完整流程
+
+设置 `DEV_ENABLE_PAYMENT=true` 后，大部分开关已经跳过。但订阅购买流程中还有两个硬编码检查会导致卡住：
+
+**错误1："套餐金额过低"**
+创建套餐时 `PriceAmount` 需要 ≥ 0.01。在管理面板创建套餐时把价格设为 ≥ 0.01 即可（如 1 USD）。如果设为 0 会被这个检查拦住。
+
+**错误2："当前管理员未配置支付信息"**
+`GetEpayClient()` 检查 `EpayId/EpayKey/PayAddress` 三个配空就返回 nil。这个不走 `DevEnablePayment` 开关。
+
+**Dev 模式已修复的行为**（当前代码已改好）：
+- `GetEpayClient()` → 在 dev 模式下用虚拟参数也能创建 client，不再卡住
+- `SubscriptionRequestEpay()` → 在 dev 模式下不发起真实支付，而是直接调用 `AdminBindSubscription` 绑定套餐
+
+**本地测试完整流程就三步：**
+```bash
+# 1. 启动（打开 dev 支付模式）
+DEV_ENABLE_PAYMENT=true go run main.go --log-dir ./logs
+
+# 2. 管理面板操作
+#    - 系统设置 → Billing → Payment Gateway → 合规声明确认
+#    - 套餐管理 → 新增套餐（金额设 ≥ 0.01，如 1 USD）
+#    - 套餐管理 → 点击购买 → 用余额支付或走 Epay
+
+# 3. 验证：用户该套餐的状态变为"已订阅"
+```
+
+> 注意：前端"购买套餐"按钮走的是余额支付（余额充足时直接扣减）
+> 或 Epay 支付（触发 `SubscriptionRequestEpay`，dev 模式自动模拟绑定）。
+> 走"管理 → 为用户订阅套餐"则无需支付，直接绑定。
+
+
+## 总结一下网络支付接入的内容：汇总支付
+
+
 ## 1. 项目定位
 
 **Next-Generation LLM Gateway and AI Asset Management System**（新一代大模型网关与 AI 资产管理系统）

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -61,6 +62,17 @@ func SubscriptionRequestEpay(c *gin.Context) {
 			common.ApiErrorMsg(c, "已达到该套餐购买上限")
 			return
 		}
+	}
+
+	if constant.DevEnablePayment {
+		// Dev mode: auto-bind subscription without real payment
+		msg, err := model.AdminBindSubscription(userId, plan.Id, "")
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		common.ApiSuccess(c, gin.H{"message": "success (dev mode, no real payment)", "data": msg})
+		return
 	}
 
 	callBackAddress := service.GetCallbackAddress()

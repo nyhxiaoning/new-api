@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -22,7 +23,7 @@ import (
 )
 
 func GetTopUpInfo(c *gin.Context) {
-	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
+	complianceConfirmed := constant.DevEnablePayment || operation_setting.IsPaymentComplianceConfirmed()
 
 	// 获取支付方式
 	payMethods := operation_setting.PayMethods
@@ -133,6 +134,27 @@ type AmountRequest struct {
 }
 
 func GetEpayClient() *epay.Client {
+	if constant.DevEnablePayment {
+		// In dev mode, just check PayAddress is non-empty enough to create a client.
+		// If empty, fall through and return nil so callers can handle it.
+		addr := operation_setting.PayAddress
+		if addr == "" {
+			addr = "https://dev.example.com" // dummy address for client init
+		}
+		id := operation_setting.EpayId
+		if id == "" {
+			id = "dev"
+		}
+		key := operation_setting.EpayKey
+		if key == "" {
+			key = "dev"
+		}
+		withUrl, err := epay.NewClient(&epay.Config{PartnerID: id, Key: key}, addr)
+		if err != nil {
+			return nil
+		}
+		return withUrl
+	}
 	if operation_setting.PayAddress == "" || operation_setting.EpayId == "" || operation_setting.EpayKey == "" {
 		return nil
 	}

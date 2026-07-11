@@ -3,15 +3,22 @@ package controller
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
 func isPaymentComplianceConfirmed() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	return operation_setting.IsPaymentComplianceConfirmed()
 }
 
 func isStripeTopUpEnabled() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
@@ -21,6 +28,9 @@ func isStripeTopUpEnabled() bool {
 }
 
 func isStripeWebhookConfigured() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	return strings.TrimSpace(setting.StripeWebhookSecret) != ""
 }
 
@@ -29,6 +39,9 @@ func isStripeWebhookEnabled() bool {
 }
 
 func isCreemTopUpEnabled() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
@@ -39,6 +52,9 @@ func isCreemTopUpEnabled() bool {
 }
 
 func isCreemWebhookConfigured() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	return strings.TrimSpace(setting.CreemWebhookSecret) != ""
 }
 
@@ -47,6 +63,9 @@ func isCreemWebhookEnabled() bool {
 }
 
 func isWaffoTopUpEnabled() bool {
+	if constant.DevEnablePayment {
+		return setting.WaffoEnabled // still respect the enable toggle
+	}
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
@@ -58,6 +77,9 @@ func isWaffoTopUpEnabled() bool {
 }
 
 func isWaffoWebhookConfigured() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	if setting.WaffoSandbox {
 		return strings.TrimSpace(setting.WaffoSandboxApiKey) != "" &&
 			strings.TrimSpace(setting.WaffoSandboxPrivateKey) != "" &&
@@ -74,6 +96,9 @@ func isWaffoWebhookEnabled() bool {
 }
 
 func isWaffoPancakeTopUpEnabled() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
@@ -85,6 +110,9 @@ func isWaffoPancakeTopUpEnabled() bool {
 }
 
 func isWaffoPancakeWebhookConfigured() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	return isWaffoPancakeTopUpEnabled()
 }
 
@@ -93,6 +121,9 @@ func isWaffoPancakeWebhookEnabled() bool {
 }
 
 func isEpayTopUpEnabled() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
@@ -100,6 +131,9 @@ func isEpayTopUpEnabled() bool {
 }
 
 func isEpayWebhookConfigured() bool {
+	if constant.DevEnablePayment {
+		return true
+	}
 	return strings.TrimSpace(operation_setting.PayAddress) != "" &&
 		strings.TrimSpace(operation_setting.EpayId) != "" &&
 		strings.TrimSpace(operation_setting.EpayKey) != ""
